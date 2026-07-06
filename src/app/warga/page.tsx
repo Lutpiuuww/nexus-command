@@ -1,5 +1,4 @@
 "use client";
-
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
@@ -12,7 +11,6 @@ export default function PortalWarga() {
   const [shelterList, setShelterList] = useState<any[]>([]);
   
   const [bantuanData, setBantuanData] = useState<any>(null);
-
   const [dialog, setDialog] = useState<{
     show: boolean; title: string; message: string; theme: 'red' | 'emerald' | 'cyan'; isProcessing: boolean;
   }>({ show: false, title: '', message: '', theme: 'cyan', isProcessing: false });
@@ -27,31 +25,23 @@ export default function PortalWarga() {
       router.push('/');
       return;
     }
-
     const fetchData = async () => {
       const { data: statusData } = await supabase.from('peringatan_dini').select('*').order('id', { ascending: false }).limit(1);
       if (statusData && statusData.length > 0) {
         setGlobalStatus(statusData[0].status_level);
         setPesanStatus(statusData[0].pesan);
       }
-
       const { data: shelterData } = await supabase.from('master_shelter').select('*');
       if (shelterData) setShelterList(shelterData);
-      
-      // PERBAIKAN: Fitur penarikan riwayat lama (History) dihapus dari sini
-      // Agar layar warga selalu bersih saat pertama kali dibuka!
     };
     fetchData();
-
     const statusChannel = supabase.channel('warga_status')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'peringatan_dini' }, (payload) => {
         setGlobalStatus(payload.new.status_level);
         setPesanStatus(payload.new.pesan);
       }).subscribe();
-
     const tugasChannel = supabase.channel('warga_tugas')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'penugasan_relawan' }, (payload) => {
-        // Kartu ini HANYA AKAN MUNCUL jika ada INSERT data baru (Tombol Dispatch ditekan detik ini)
         if (profile && payload.new.nama_pelapor === profile.nama) {
           setTimeout(() => {
             setBantuanData(payload.new);
@@ -66,7 +56,6 @@ export default function PortalWarga() {
           }, 3500); // Delay realistis 3.5 detik
         }
       }).subscribe();
-
     return () => { 
       supabase.removeChannel(statusChannel); 
       supabase.removeChannel(tugasChannel); 
@@ -74,7 +63,6 @@ export default function PortalWarga() {
   }, [router]);
 
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
   const generateFallbackLocation = (callback: (lat: number, lon: number) => void) => {
     const fallbackLat = 5.1812 + (Math.random() * 0.005);
     const fallbackLon = 97.1415 + (Math.random() * 0.005);
@@ -84,22 +72,21 @@ export default function PortalWarga() {
   const handleSOS = () => {
     if (!wargaProfile) return;
     if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-
     setDialog({ show: true, title: 'MEMANCARKAN SINYAL...', message: 'Mencari dan mengunci koordinat satelit...', theme: 'cyan', isProcessing: true });
-
+    
     const executeSOS = async (lat: number, lon: number) => {
       await sleep(1500);
+      // PERBAIKAN 4: Menambahkan status: 'darurat' saat insert SOS
       const { error } = await supabase.from('laporan_darurat').insert([{ 
-        latitude: lat, longitude: lon, nama_korban: wargaProfile.nama, kontak_korban: wargaProfile.hp, alamat_korban: wargaProfile.alamat
+        latitude: lat, longitude: lon, nama_korban: wargaProfile.nama, kontak_korban: wargaProfile.hp, alamat_korban: wargaProfile.alamat, status: 'darurat'
       }]);
-
       if (error) {
         setDialog({ show: true, title: 'DATABASE ERROR', message: error.message, theme: 'red', isProcessing: false });
       } else {
         setDialog({ show: true, title: 'SOS TERKIRIM (KRITIS)', message: `Sinyal darurat berhasil dipancarkan! Menunggu respons dari Command Center...`, theme: 'red', isProcessing: false });
       }
     };
-
+    
     if (typeof navigator !== "undefined" && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => executeSOS(pos.coords.latitude, pos.coords.longitude),
@@ -113,21 +100,29 @@ export default function PortalWarga() {
 
   const handleAman = () => {
     if (navigator.vibrate) navigator.vibrate(100);
+    if (!wargaProfile) return;
     
     setDialog({ show: true, title: 'VERIFIKASI SISTEM...', message: 'Menetapkan lokasi zona aman Anda ke dalam database pusat...', theme: 'cyan', isProcessing: true });
-
+    
     const executeAman = async (lat: number, lon: number) => {
       await sleep(1500); 
-      const { error } = await supabase.from('warga_aman').insert([{ latitude: lat, longitude: lon }]);
-
-      if (error) {
-        setDialog({ show: true, title: 'DATABASE ERROR', message: error.message, theme: 'red', isProcessing: false });
+      // Insert titik evakuasi aman
+      const { error: err1 } = await supabase.from('warga_aman').insert([{ latitude: lat, longitude: lon }]);
+      
+      // PERBAIKAN 5: Mengubah status di tabel laporan_darurat menjadi 'selesai'
+      const { error: err2 } = await supabase.from('laporan_darurat')
+        .update({ status: 'selesai' })
+        .eq('nama_korban', wargaProfile.nama);
+      
+      if (err1 || err2) {
+        const errorMsg = err1 ? err1.message : err2?.message;
+        setDialog({ show: true, title: 'DATABASE ERROR', message: errorMsg || 'Gagal sinkronisasi data', theme: 'red', isProcessing: false });
       } else {
         setBantuanData(null); // Membersihkan kartu penjemputan dari layar
         setDialog({ show: true, title: 'STATUS AMAN TERKONFIRMASI', message: 'Pusat Komando mencatat Anda di zona aman. Tetap waspada dan ikuti arahan selanjutnya.', theme: 'emerald', isProcessing: false });
       }
     };
-
+    
     if (typeof navigator !== "undefined" && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => executeAman(pos.coords.latitude, pos.coords.longitude),
@@ -142,23 +137,22 @@ export default function PortalWarga() {
   if (!wargaProfile) return null;
 
   return (
-    <main className="min-h-[100dvh] bg-[#04060c] text-white flex flex-col items-center py-8 px-5 font-mono relative overflow-x-hidden overflow-y-auto">
+    <main className="min-h-100dvh bg-[#04060c] text-white flex flex-col items-center py-8 px-5 font-mono relative overflow-x-hidden overflow-y-auto">
       
       <div className="w-full flex justify-between items-start z-10">
         <div className="bg-white/5 border border-white/10 px-3 py-1.5 rounded-full flex items-center gap-2 backdrop-blur-md">
           <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
-          <p className="text-[9px] text-gray-300 tracking-widest truncate max-w-[120px]">
+          <p className="text-[9px] text-gray-300 tracking-widest truncate max-w-120px">
             ID: <span className="text-cyan-400 font-bold uppercase">{wargaProfile.nama}</span>
           </p>
         </div>
       </div>
-
       <div className="text-center mt-2 mb-6 z-10">
         <div className="w-2 h-2 bg-cyan-500 rounded-full mx-auto mb-2 animate-ping"></div>
         <h1 className="text-2xl font-black tracking-widest uppercase">PORTAL <span className="text-cyan-400">SIAGA</span></h1>
         <p className="text-[9px] text-gray-500 tracking-widest mt-1">Layanan Evakuasi Cepat</p>
       </div>
-
+      
       <div className={`w-full max-w-sm rounded-xl p-4 border mb-6 flex flex-col gap-2 transition-colors duration-500 z-10
         ${globalStatus === 'KRITIS' ? 'bg-red-950/20 border-red-500 shadow-[0_0_20px_rgba(239,68,68,0.2)]' : 'bg-emerald-950/10 border-emerald-900/50'}`}
       >
@@ -188,7 +182,7 @@ export default function PortalWarga() {
             
             <div className="border-t border-white/10 pt-3">
               <p className="text-[9px] text-gray-400 uppercase tracking-widest mb-0.5">Unit Medis Pendamping</p>
-              <p className="text-xs font-bold text-white">Tim Triase Medis (Dr. Naila)</p>
+              <p className="text-xs font-bold text-white">Tim Triase Medis (Dr. Raffa & Dr. Aini)</p>
               <p className="text-[10px] text-emerald-400 font-sans mt-0.5 flex items-center gap-1">
                 <span>🚑</span> Bergerak menuju koordinat Anda
               </p>
@@ -205,7 +199,6 @@ export default function PortalWarga() {
             <span className="text-[8px] text-red-200 tracking-[0.2em] uppercase">Tekan Untuk Bantuan</span>
           </div>
         </button>
-
         <button onClick={handleAman} className="relative z-20 px-6 py-2 border border-white/20 hover:bg-white/10 rounded-full text-[10px] font-bold tracking-widest text-gray-300 transition-colors cursor-pointer">
           LAPOR SAYA AMAN
         </button>
@@ -262,7 +255,7 @@ export default function PortalWarga() {
 
       {/* CUSTOM UI MODAL */}
       {dialog.show && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-100 flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className={`bg-[#0a0a14] border-2 rounded-2xl w-full max-w-xs p-6 shadow-2xl transform transition-all 
             ${dialog.theme === 'red' ? 'border-red-500/50 shadow-[0_0_40px_rgba(239,68,68,0.2)]' : 
               dialog.theme === 'emerald' ? 'border-emerald-500/50 shadow-[0_0_40px_rgba(16,185,129,0.2)]' : 
