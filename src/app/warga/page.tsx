@@ -14,6 +14,10 @@ export default function PortalWarga() {
   const [dialog, setDialog] = useState<{
     show: boolean; title: string; message: string; theme: 'red' | 'emerald' | 'cyan'; isProcessing: boolean;
   }>({ show: false, title: '', message: '', theme: 'cyan', isProcessing: false });
+
+  // STATE BARU: Untuk fitur Swipe to SOS
+  const [swipeValue, setSwipeValue] = useState(0);
+  const [isTriggered, setIsTriggered] = useState(false);
   
   useEffect(() => {
     const saved = localStorage.getItem('nexus_warga_profile');
@@ -53,7 +57,7 @@ export default function PortalWarga() {
               isProcessing: false 
             });
             if (navigator.vibrate) navigator.vibrate([500, 200, 500]); 
-          }, 3500); // Delay realistis 3.5 detik
+          }, 3500); 
         }
       }).subscribe();
     return () => { 
@@ -69,6 +73,19 @@ export default function PortalWarga() {
     callback(fallbackLat, fallbackLon);
   };
 
+  // FUNGSI BARU: Mengontrol geseran slider
+  const handleSwipe = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseInt(e.target.value);
+    setSwipeValue(value);
+
+    // Jika digeser sampai ujung (lebih dari 95%)
+    if (value > 95 && !isTriggered) {
+      setIsTriggered(true);
+      setSwipeValue(100); // Kunci mentok di kanan
+      handleSOS(); // Panggil fungsi database milikmu
+    }
+  };
+
   const handleSOS = () => {
     if (!wargaProfile) return;
     if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
@@ -76,12 +93,14 @@ export default function PortalWarga() {
     
     const executeSOS = async (lat: number, lon: number) => {
       await sleep(1500);
-      // PERBAIKAN 4: Menambahkan status: 'darurat' saat insert SOS
       const { error } = await supabase.from('laporan_darurat').insert([{ 
         latitude: lat, longitude: lon, nama_korban: wargaProfile.nama, kontak_korban: wargaProfile.hp, alamat_korban: wargaProfile.alamat, status: 'darurat'
       }]);
       if (error) {
         setDialog({ show: true, title: 'DATABASE ERROR', message: error.message, theme: 'red', isProcessing: false });
+        // Jika gagal, reset slider
+        setIsTriggered(false);
+        setSwipeValue(0);
       } else {
         setDialog({ show: true, title: 'SOS TERKIRIM (KRITIS)', message: `Sinyal darurat berhasil dipancarkan! Menunggu respons dari Command Center...`, theme: 'red', isProcessing: false });
       }
@@ -102,14 +121,16 @@ export default function PortalWarga() {
     if (navigator.vibrate) navigator.vibrate(100);
     if (!wargaProfile) return;
     
+    // Reset status Slider jika warga melaporkan aman
+    setIsTriggered(false);
+    setSwipeValue(0);
+
     setDialog({ show: true, title: 'VERIFIKASI SISTEM...', message: 'Menetapkan lokasi zona aman Anda ke dalam database pusat...', theme: 'cyan', isProcessing: true });
     
     const executeAman = async (lat: number, lon: number) => {
       await sleep(1500); 
-      // Insert titik evakuasi aman
       const { error: err1 } = await supabase.from('warga_aman').insert([{ latitude: lat, longitude: lon }]);
       
-      // PERBAIKAN 5: Mengubah status di tabel laporan_darurat menjadi 'selesai'
       const { error: err2 } = await supabase.from('laporan_darurat')
         .update({ status: 'selesai' })
         .eq('nama_korban', wargaProfile.nama);
@@ -118,7 +139,7 @@ export default function PortalWarga() {
         const errorMsg = err1 ? err1.message : err2?.message;
         setDialog({ show: true, title: 'DATABASE ERROR', message: errorMsg || 'Gagal sinkronisasi data', theme: 'red', isProcessing: false });
       } else {
-        setBantuanData(null); // Membersihkan kartu penjemputan dari layar
+        setBantuanData(null); 
         setDialog({ show: true, title: 'STATUS AMAN TERKONFIRMASI', message: 'Pusat Komando mencatat Anda di zona aman. Tetap waspada dan ikuti arahan selanjutnya.', theme: 'emerald', isProcessing: false });
       }
     };
@@ -147,6 +168,7 @@ export default function PortalWarga() {
           </p>
         </div>
       </div>
+
       <div className="text-center mt-2 mb-6 z-10">
         <div className="w-2 h-2 bg-cyan-500 rounded-full mx-auto mb-2 animate-ping"></div>
         <h1 className="text-2xl font-black tracking-widest uppercase">PORTAL <span className="text-cyan-400">SIAGA</span></h1>
@@ -191,19 +213,67 @@ export default function PortalWarga() {
         </div>
       )}
 
-      <div className="flex flex-col items-center gap-6 mb-10 z-10">
-        <button onClick={handleSOS} className="relative group w-40 h-40 rounded-full border-none focus:outline-none cursor-pointer active:scale-95 transition-transform z-10">
-          <div className="absolute inset-0 bg-red-600 rounded-full animate-ping opacity-20 group-hover:opacity-40 transition-opacity duration-300 pointer-events-none"></div>
-          <div className="absolute inset-2 bg-gradient-to-b from-red-500 to-red-700 rounded-full shadow-[0_0_40px_rgba(239,68,68,0.5)] flex flex-col items-center justify-center border-4 border-red-400/50 pointer-events-none">
-            <span className="text-4xl font-black tracking-widest text-white mb-1">SOS</span>
-            <span className="text-[8px] text-red-200 tracking-[0.2em] uppercase">Tekan Untuk Bantuan</span>
+      {/* AREA TOMBOL SWIPE TO SOS - LUXURY EDITION */}
+      <div className="flex flex-col items-center gap-6 mb-12 z-10 w-full mt-2">
+        <div className={`relative w-[300px] h-[72px] rounded-full p-1.5 overflow-hidden transition-all duration-500 flex items-center font-sans
+          ${isTriggered 
+            ? 'bg-red-950/20 border border-red-500/50 shadow-[inset_0_0_30px_rgba(220,38,38,0.15)]' 
+            : 'bg-[#06090e] border border-white/5 shadow-[inset_0_8px_20px_rgba(0,0,0,0.9)]'}`}
+        >
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+            <span className={`font-semibold text-xs tracking-[0.25em] transition-all duration-500 ${isTriggered ? 'opacity-0 scale-95' : 'text-gray-600 ml-6'}`}>
+              GESER UNTUK SOS
+            </span>
+            <span className={`absolute font-black text-sm tracking-widest text-red-500 transition-all duration-500 delay-100 ${isTriggered ? 'opacity-100 scale-100' : 'opacity-0 scale-110'}`}>
+              🚨 DARURAT AKTIF
+            </span>
           </div>
-        </button>
-        <button onClick={handleAman} className="relative z-20 px-6 py-2 border border-white/20 hover:bg-white/10 rounded-full text-[10px] font-bold tracking-widest text-gray-300 transition-colors cursor-pointer">
-          LAPOR SAYA AMAN
+
+          <div 
+            className="absolute left-1.5 top-1.5 bottom-1.5 rounded-full bg-gradient-to-r from-red-600/10 to-red-600/40 z-10 transition-all duration-75"
+            style={{ width: isTriggered ? 'calc(100% - 12px)' : `calc(60px + ${(swipeValue / 100) * 228}px)` }}
+          />
+
+          <div 
+            className={`absolute left-1.5 z-20 h-[60px] w-[60px] rounded-full flex items-center justify-center transition-all duration-75
+              ${isTriggered 
+                ? 'bg-red-600 border border-red-400 shadow-[0_0_25px_rgba(239,68,68,0.6)]' 
+                : 'bg-gradient-to-b from-[#1a2235] to-[#0f1523] border-t border-slate-600/50 shadow-2xl'}`}
+            style={{ transform: `translateX(${isTriggered ? 228 : (swipeValue / 100) * 228}px)` }}
+          >
+            <div className={`transition-all duration-300 ${isTriggered ? 'text-white' : 'text-red-500'}`}>
+              {isTriggered ? (
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-7 w-7 drop-shadow-md" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                </svg>
+              )}
+            </div>
+          </div>
+
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={swipeValue}
+            onChange={handleSwipe}
+            disabled={isTriggered}
+            className="absolute z-30 w-full h-full opacity-0 cursor-pointer"
+          />
+        </div>
+
+        <button 
+          onClick={handleAman} 
+          className="relative z-20 px-8 py-2.5 border border-white/10 hover:border-white/30 rounded-full text-[10px] font-bold tracking-[0.2em] text-gray-500 hover:text-gray-300 transition-all cursor-pointer uppercase font-sans mt-2"
+        >
+          Lapor saya Aman
         </button>
       </div>
 
+      {/* LIVE RADAR POSKO */}
       <div className="w-full max-w-sm flex flex-col gap-3 z-10 mb-6">
         <div className="flex justify-between items-center border-b border-white/10 pb-2">
           <h3 className="text-[10px] font-bold tracking-widest text-gray-300">LIVE RADAR POSKO</h3>
@@ -227,6 +297,7 @@ export default function PortalWarga() {
         </div>
       </div>
 
+      {/* KONTAK MEDIS DARURAT */}
       <div className="w-full max-w-sm flex flex-col gap-3 z-10 mb-8">
         <div className="flex justify-between items-center border-b border-white/10 pb-2">
           <h3 className="text-[10px] font-bold tracking-widest text-gray-300">KONTAK MEDIS DARURAT</h3>

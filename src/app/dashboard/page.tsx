@@ -155,10 +155,10 @@ export default function CommandCenter() {
   const mapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${minLon},${minLat},${maxLon},${maxLat}&layer=mapnik`;
 
   return (
-    <main className="min-h-[100dvh] bg-[#06060c] text-white p-4 lg:p-6 pb-10 font-mono flex flex-col lg:flex-row items-stretch gap-6 overflow-x-hidden overflow-y-auto relative">
+    <main className="h-screen w-full bg-[#06060c] text-white p-4 lg:p-6 font-sans flex flex-col lg:flex-row items-stretch gap-6 overflow-hidden relative">
 
       <section className="w-full lg:w-1/4 flex flex-col gap-3 z-10">
-        <div className="flex-1 min-h-[200px] lg:min-h-0 border border-white/10 bg-black/40 rounded-2xl p-4 lg:p-5 flex flex-col shadow-lg">
+        <div className="flex-1 min-h-200px lg:min-h-0 border border-white/10 bg-black/40 rounded-2xl p-4 lg:p-5 flex flex-col shadow-lg">
           <h2 className="text-cyan-400 font-bold tracking-widest flex items-center gap-2 mb-4"><div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></div> ANALYTICS</h2>
           <div className="flex-1 text-xs text-gray-400 flex flex-col gap-2 overflow-y-auto pr-2">
             <p className="text-emerald-400 font-bold">{'>'} Total Selamat: {safeCount} Jiwa</p>
@@ -179,7 +179,7 @@ export default function CommandCenter() {
         </div>
       </section>
 
-      <section className="w-full lg:w-2/4 min-h-[400px] lg:min-h-0 relative border border-white/10 rounded-2xl overflow-hidden bg-black/50 shadow-2xl z-10 flex-1">
+      <section className="w-full lg:w-2/4 min-h-400px lg:min-h-0 relative border border-white/10 rounded-2xl overflow-hidden bg-black/50 shadow-2xl z-10 flex-1">
         <div className="absolute top-4 left-4 z-30">
           {mapStatus === 'SOS' ? (
             <div className="bg-red-950/80 border border-red-500 text-red-400 px-4 py-1.5 rounded-full text-[10px] font-bold tracking-widest flex items-center gap-2 animate-pulse backdrop-blur-md">ZONA KRITIS: SOS AKTIF</div>
@@ -228,7 +228,7 @@ export default function CommandCenter() {
       </section>
 
       <section className="w-full lg:w-1/4 flex flex-col gap-3 z-10">
-        <div className="flex-1 min-h-[300px] lg:min-h-0 border border-white/10 bg-black/40 rounded-2xl p-4 lg:p-5 flex flex-col shadow-lg">
+        <div className="flex-1 min-h-300px lg:min-h-0 border border-white/10 bg-black/40 rounded-2xl p-4 lg:p-5 flex flex-col shadow-lg">
           <div className="flex items-center justify-between mb-4"><h2 className="text-white font-bold tracking-widest">EMERGENCY LOG</h2><span className="text-[9px] bg-red-950/50 border border-red-500/50 text-red-400 px-2 py-0.5 rounded-full animate-pulse">LIVE</span></div>
           <div className="flex-1 overflow-y-auto flex flex-col gap-3 pr-2">
             {logs.map((log) => (
@@ -241,7 +241,7 @@ export default function CommandCenter() {
 
       {/* DIALOG POPUP */}
       {dialog.show && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-100 flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className={`bg-[#0a0a14] border-2 rounded-2xl w-full max-w-sm p-6 shadow-2xl transform transition-all ${dialog.theme === 'red' ? 'border-red-500/50 shadow-[0_0_40px_rgba(239,68,68,0.2)]' : dialog.theme === 'emerald' ? 'border-emerald-500/50 shadow-[0_0_40px_rgba(16,185,129,0.2)]' : 'border-cyan-500/50 shadow-[0_0_40px_rgba(34,211,238,0.2)]'}`}>
             <h3 className={`text-sm font-black tracking-widest uppercase mb-3 ${dialog.theme === 'red' ? 'text-red-400' : dialog.theme === 'emerald' ? 'text-emerald-400' : 'text-cyan-400'}`}>{dialog.title}</h3>
             <p className="text-xs text-gray-300 leading-relaxed font-sans mb-6">{dialog.message}</p>
@@ -257,7 +257,7 @@ export default function CommandCenter() {
 
       {/* PANEL PETUGAS & POSKO TETAP SAMA */}
       {showPersonnel && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[90] flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-90 flex items-center justify-center p-4">
           <div className="bg-[#0b0b16] border border-white/10 rounded-2xl w-full max-w-lg p-6 max-h-[80vh] flex flex-col relative shadow-2xl">
             <h3 className="text-sm font-bold text-cyan-400 tracking-widest uppercase mb-4 border-b border-white/10 pb-2">📋 DAFTAR PETUGAS AKTIF</h3>
             <div className="flex-1 overflow-y-auto flex flex-col gap-3 pr-1 text-xs">
@@ -274,7 +274,7 @@ export default function CommandCenter() {
       )}
 
       {showShelter && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[90] flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-90 flex items-center justify-center p-4">
           <div className="bg-[#0b0b16] border border-white/10 rounded-2xl w-full max-w-lg p-6 max-h-[80vh] flex flex-col relative shadow-2xl">
             <h3 className="text-sm font-bold text-indigo-400 tracking-widest uppercase mb-4 border-b border-white/10 pb-2">🏢 KAPASITAS POSKO</h3>
             <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1 text-xs">
