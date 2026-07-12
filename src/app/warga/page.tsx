@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 
@@ -9,16 +9,21 @@ export default function PortalWarga() {
   const [globalStatus, setGlobalStatus] = useState<'AMAN' | 'KRITIS'>('AMAN');
   const [pesanStatus, setPesanStatus] = useState('Tidak ada anomali terdeteksi.');
   const [shelterList, setShelterList] = useState<any[]>([]);
-  
   const [bantuanData, setBantuanData] = useState<any>(null);
+  
   const [dialog, setDialog] = useState<{
     show: boolean; title: string; message: string; theme: 'red' | 'emerald' | 'cyan'; isProcessing: boolean;
   }>({ show: false, title: '', message: '', theme: 'cyan', isProcessing: false });
 
-  // STATE BARU: Untuk fitur Swipe to SOS
+  // STATE SLIDER
   const [swipeValue, setSwipeValue] = useState(0);
   const [isTriggered, setIsTriggered] = useState(false);
-  
+
+  // STATE BARU: KAMERA & AI VISION
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [aiStatus, setAiStatus] = useState<'idle' | 'scanning' | 'verified' | 'rejected'>('idle');
+
   useEffect(() => {
     const saved = localStorage.getItem('nexus_warga_profile');
     let profile = null;
@@ -30,13 +35,30 @@ export default function PortalWarga() {
       return;
     }
     const fetchData = async () => {
-      const { data: statusData } = await supabase.from('peringatan_dini').select('*').order('id', { ascending: false }).limit(1);
-      if (statusData && statusData.length > 0) {
-        setGlobalStatus(statusData[0].status_level);
-        setPesanStatus(statusData[0].pesan);
+      try {
+        const { data: statusData, error: statusErr } = await supabase.from('peringatan_dini').select('*').order('id', { ascending: false }).limit(1);
+        if (statusErr) throw statusErr; // Lempar error jika Supabase mati
+        
+        if (statusData && statusData.length > 0) {
+          setGlobalStatus(statusData[0].status_level);
+          setPesanStatus(statusData[0].pesan);
+        }
+
+        const { data: shelterData, error: shelterErr } = await supabase.from('master_shelter').select('*');
+        if (shelterErr) throw shelterErr; // Lempar error jika Supabase mati
+        if (shelterData) setShelterList(shelterData);
+
+      } catch (error) {
+        console.warn("⚠️ SUPABASE DOWN: Mengaktifkan Mode Offline Simulasi");
+        // DATA DUMMY OTOMATIS JIKA SERVER MATI
+        setGlobalStatus('AMAN');
+        setPesanStatus('Tidak ada anomali terdeteksi (Sistem Berjalan di Mode Offline).');
+        setShelterList([
+          { id_shelter: 1, nama_shelter: "RS Kesdam Lhokseumawe", kapasitas_terisi: 120, kapasitas_maksimal: 500 },
+          { id_shelter: 2, nama_shelter: "Masjid Islamic Center", kapasitas_terisi: 750, kapasitas_maksimal: 1000 },
+          { id_shelter: 3, nama_shelter: "Stadion Tunas Bangsa", kapasitas_terisi: 1950, kapasitas_maksimal: 2000 }
+        ]);
       }
-      const { data: shelterData } = await supabase.from('master_shelter').select('*');
-      if (shelterData) setShelterList(shelterData);
     };
     fetchData();
     const statusChannel = supabase.channel('warga_status')
@@ -50,11 +72,8 @@ export default function PortalWarga() {
           setTimeout(() => {
             setBantuanData(payload.new);
             setDialog({ 
-              show: true, 
-              title: 'UNIT RESCUE DIKERAHKAN!', 
-              message: `Tim evakuasi dan medis telah menerima instruksi dan sedang bergerak menuju ke titik GPS Anda saat ini.`, 
-              theme: 'cyan', 
-              isProcessing: false 
+              show: true, title: 'UNIT RESCUE DIKERAHKAN!', 
+              message: `Tim evakuasi sedang bergerak ke titik GPS Anda.`, theme: 'cyan', isProcessing: false 
             });
             if (navigator.vibrate) navigator.vibrate([500, 200, 500]); 
           }, 3500); 
@@ -73,39 +92,178 @@ export default function PortalWarga() {
     callback(fallbackLat, fallbackLon);
   };
 
-  // FUNGSI BARU: Mengontrol geseran slider
+  // 1. FUNGSI SWIPE -> MEMBUKA KAMERA
   const handleSwipe = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = parseInt(e.target.value);
     setSwipeValue(value);
 
-    // Jika digeser sampai ujung (lebih dari 95%)
     if (value > 95 && !isTriggered) {
       setIsTriggered(true);
-      setSwipeValue(100); // Kunci mentok di kanan
-      handleSOS(); // Panggil fungsi database milikmu
+      setSwipeValue(100);
+      
+      // Buka kamera HP secara otomatis
+      if (cameraInputRef.current) {
+        cameraInputRef.current.click();
+      }
     }
   };
 
-  const handleSOS = () => {
-    if (!wargaProfile) return;
-    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-    setDialog({ show: true, title: 'MEMANCARKAN SINYAL...', message: 'Mencari dan mengunci koordinat satelit...', theme: 'cyan', isProcessing: true });
+  // 2. FUNGSI MENANGKAP FOTO & MEMULAI AI
+  const handlePhotoCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      // Jika user batal memotret, reset slider
+      resetSlider();
+      return;
+    }
+
+    // Buat URL preview untuk ditampilkan di layar
+    const imageUrl = URL.createObjectURL(file);
+    setPhotoPreview(imageUrl);
     
-    const executeSOS = async (lat: number, lon: number) => {
-      await sleep(1500);
-      const { error } = await supabase.from('laporan_darurat').insert([{ 
-        latitude: lat, longitude: lon, nama_korban: wargaProfile.nama, kontak_korban: wargaProfile.hp, alamat_korban: wargaProfile.alamat, status: 'darurat'
-      }]);
-      if (error) {
-        setDialog({ show: true, title: 'DATABASE ERROR', message: error.message, theme: 'red', isProcessing: false });
-        // Jika gagal, reset slider
-        setIsTriggered(false);
-        setSwipeValue(0);
+    // Mulai proses scanning AI
+    processAIVision(file);
+  };
+
+ // FUNGSI AI VISION (Versi Bersih)
+  const processAIVision = async (file: File) => {
+    setAiStatus('scanning');
+    if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+
+    try {
+      const formData = new FormData();
+      formData.append("image", file);
+
+      const response = await fetch('/api/vision-scan', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorDetail = await response.text();
+        console.error("🚨 ERROR DARI BACKEND AI:", errorDetail);
+        throw new Error("Gagal menghubungi server AI");
+      }
+
+      // Hapus duplikasi, cukup panggil sekali saja di sini
+      const data = await response.json();
+      
+      // AI Google Menentukan Nasib Laporannya!
+      const isPrank = data.status === "PRANK";
+
+      if (isPrank) {
+        setAiStatus('rejected');
+        if (navigator.vibrate) navigator.vibrate([500, 200, 500]);
+        setTimeout(() => {
+          setDialog({ 
+            show: true, 
+            title: 'VERIFIKASI AI GAGAL (PRANK)', 
+            message: 'Sistem AI mendeteksi gambar tidak relevan dengan situasi darurat.', 
+            theme: 'red', 
+            isProcessing: false 
+          });
+          resetSlider();
+        }, 3000);
       } else {
-        setDialog({ show: true, title: 'SOS TERKIRIM (KRITIS)', message: `Sinyal darurat berhasil dipancarkan! Menunggu respons dari Command Center...`, theme: 'red', isProcessing: false });
+        setAiStatus('verified');
+        if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+        
+        // --- 🚀 FITUR BARU: UPLOAD FOTO KE SUPABASE STORAGE ---
+        try {
+          // Buat nama file unik agar tidak bentrok
+          const fileExt = file.name.split('.').pop();
+          const fileName = `sos-${Date.now()}.${fileExt}`;
+
+          // Unggah ke bucket 'emergency_photos'
+          const { data: uploadData, error: uploadError } = await supabase.storage
+            .from('emergency_photos')
+            .upload(fileName, file);
+
+          if (uploadError) throw uploadError;
+
+          // Ambil URL Publik dari foto yang baru diunggah
+          const { data: publicUrlData } = supabase.storage
+            .from('emergency_photos')
+            .getPublicUrl(fileName);
+
+          const finalPhotoUrl = publicUrlData.publicUrl;
+
+          // Tunggu sebentar untuk efek dramatis UI, lalu eksekusi SOS
+          setTimeout(() => {
+            // Modifikasi fungsi handleSOS kamu agar bisa menerima parameter foto
+            handleSOS(finalPhotoUrl); 
+          }, 1500);
+
+        } catch (uploadErr) {
+          console.error("Gagal upload foto:", uploadErr);
+          // Jika gagal upload, tetap jalankan SOS tapi tanpa foto (Failsafe)
+          setTimeout(() => { handleSOS(null); }, 1500);
+        }
+      }
+    } catch (error) {
+      console.error("Error AI:", error);
+      setAiStatus('rejected');
+      setDialog({ 
+        show: true, 
+        title: 'KONEKSI AI GAGAL', 
+        message: 'Sistem gagal menghubungi server AI. Harap coba lagi.', 
+        theme: 'red', 
+        isProcessing: false 
+      });
+      resetSlider();
+    }
+  };
+
+  const resetSlider = () => {
+    setIsTriggered(false);
+    setSwipeValue(0);
+    setPhotoPreview(null);
+    setAiStatus('idle');
+    if (cameraInputRef.current) cameraInputRef.current.value = '';
+  };
+
+  // 4. FUNGSI KIRIM DATABASE (JIKA AI LOLOS)
+  // 1. Tambahkan parameter photoUrl di dalam tanda kurung
+// 4. FUNGSI KIRIM DATABASE (JIKA AI LOLOS)
+  const handleSOS = async (photoUrl: string | null = null) => {
+    if (!wargaProfile) return; // Failsafe: Pastikan data profil ada
+
+    // Fungsi di dalam fungsi: Mengeksekusi database setelah GPS didapatkan
+    // Fungsi di dalam fungsi: Mengeksekusi database setelah GPS didapatkan
+    const executeSOS = async (lat: number, lon: number) => {
+      try {
+        const { error } = await supabase.from('laporan_darurat').insert([
+          {
+            nama_korban: wargaProfile.nama,
+            kontak_korban: wargaProfile.hp,
+            latitude: lat,
+            longitude: lon,
+            status: 'darurat',
+            photo_url: photoUrl
+          }
+        ]);
+
+        if (error) throw error;
+
+        // 👇 KODE PENYELAMAT: Menutup layar AI & memunculkan notifikasi sukses
+        resetSlider(); 
+        setDialog({
+          show: true,
+          title: 'SOS TERKIRIM!',
+          message: 'Sinyal darurat dan bukti visual telah diterima oleh Pusat Komando.',
+          theme: 'red',
+          isProcessing: false
+        });
+
+      } catch (err: any) {
+        console.error("Detail Error Supabase:", err.message, err.details, err.hint);
+        alert("Gagal kirim ke database: " + (err.message || JSON.stringify(err)));
+        
+        // Jika gagal kirim pun, layar AI harus tetap ditutup agar tidak stuck
+        resetSlider();
       }
     };
-    
+    // LOGIKA PELACAKAN GPS (Mengambil Koordinat Lhokseumawe / Sekitarnya)
     if (typeof navigator !== "undefined" && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => executeSOS(pos.coords.latitude, pos.coords.longitude),
@@ -120,27 +278,19 @@ export default function PortalWarga() {
   const handleAman = () => {
     if (navigator.vibrate) navigator.vibrate(100);
     if (!wargaProfile) return;
-    
-    // Reset status Slider jika warga melaporkan aman
-    setIsTriggered(false);
-    setSwipeValue(0);
-
+    resetSlider();
     setDialog({ show: true, title: 'VERIFIKASI SISTEM...', message: 'Menetapkan lokasi zona aman Anda ke dalam database pusat...', theme: 'cyan', isProcessing: true });
     
     const executeAman = async (lat: number, lon: number) => {
       await sleep(1500); 
       const { error: err1 } = await supabase.from('warga_aman').insert([{ latitude: lat, longitude: lon }]);
-      
-      const { error: err2 } = await supabase.from('laporan_darurat')
-        .update({ status: 'selesai' })
-        .eq('nama_korban', wargaProfile.nama);
+      const { error: err2 } = await supabase.from('laporan_darurat').update({ status: 'selesai' }).eq('nama_korban', wargaProfile.nama);
       
       if (err1 || err2) {
-        const errorMsg = err1 ? err1.message : err2?.message;
-        setDialog({ show: true, title: 'DATABASE ERROR', message: errorMsg || 'Gagal sinkronisasi data', theme: 'red', isProcessing: false });
+        setDialog({ show: true, title: 'DATABASE ERROR', message: 'Gagal sinkronisasi data', theme: 'red', isProcessing: false });
       } else {
         setBantuanData(null); 
-        setDialog({ show: true, title: 'STATUS AMAN TERKONFIRMASI', message: 'Pusat Komando mencatat Anda di zona aman. Tetap waspada dan ikuti arahan selanjutnya.', theme: 'emerald', isProcessing: false });
+        setDialog({ show: true, title: 'STATUS AMAN TERKONFIRMASI', message: 'Pusat Komando mencatat Anda di zona aman. Tetap waspada.', theme: 'emerald', isProcessing: false });
       }
     };
     
@@ -160,6 +310,16 @@ export default function PortalWarga() {
   return (
     <main className="min-h-100dvh bg-[#04060c] text-white flex flex-col items-center py-8 px-5 font-mono relative overflow-x-hidden overflow-y-auto">
       
+      {/* INPUT KAMERA TERSEMBUNYI (HTML5 API) */}
+      <input 
+        type="file" 
+        accept="image/*" 
+        capture="environment" 
+        ref={cameraInputRef}
+        onChange={handlePhotoCapture}
+        className="hidden" 
+      />
+
       <div className="w-full flex justify-between items-start z-10">
         <div className="bg-white/5 border border-white/10 px-3 py-1.5 rounded-full flex items-center gap-2 backdrop-blur-md">
           <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
@@ -184,102 +344,60 @@ export default function PortalWarga() {
         <p className="text-[10px] text-gray-400 leading-relaxed font-sans">{pesanStatus}</p>
       </div>
 
-      {/* KARTU STATUS PENJEMPUTAN */}
       {bantuanData && (
         <div className="w-full max-w-sm rounded-xl p-4 border border-cyan-500/50 bg-cyan-950/30 shadow-[0_0_30px_rgba(34,211,238,0.2)] mb-8 flex flex-col gap-3 z-10 animate-in zoom-in duration-500">
           <div className="flex justify-between items-center border-b border-cyan-500/30 pb-2">
             <h2 className="text-xs font-bold tracking-widest text-cyan-400 flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></div>
-              BANTUAN DALAM PERJALANAN
+              <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></div> BANTUAN DALAM PERJALANAN
             </h2>
             <span className="text-[8px] bg-cyan-500 text-black font-bold px-2 py-0.5 rounded-full animate-pulse">EN ROUTE</span>
           </div>
-          
           <div className="bg-black/50 border border-cyan-900 p-3 rounded-lg flex flex-col gap-3">
             <div>
               <p className="text-[9px] text-gray-400 uppercase tracking-widest mb-0.5">Koordinator Lapangan</p>
               <p className="text-sm font-bold text-white">{bantuanData.nama_petugas}</p>
               <p className="text-[10px] text-cyan-400 font-sans mt-0.5">📞 {bantuanData.kontak_petugas}</p>
             </div>
-            
             <div className="border-t border-white/10 pt-3">
               <p className="text-[9px] text-gray-400 uppercase tracking-widest mb-0.5">Unit Medis Pendamping</p>
               <p className="text-xs font-bold text-white">Tim Triase Medis (Dr. Raffa & Dr. Aini)</p>
-              <p className="text-[10px] text-emerald-400 font-sans mt-0.5 flex items-center gap-1">
-                <span>🚑</span> Bergerak menuju koordinat Anda
-              </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* AREA TOMBOL SWIPE TO SOS - LUXURY EDITION */}
+      {/* AREA TOMBOL SWIPE TO SOS */}
       <div className="flex flex-col items-center gap-6 mb-12 z-10 w-full mt-2">
         <div className={`relative w-[300px] h-[72px] rounded-full p-1.5 overflow-hidden transition-all duration-500 flex items-center font-sans
-          ${isTriggered 
-            ? 'bg-red-950/20 border border-red-500/50 shadow-[inset_0_0_30px_rgba(220,38,38,0.15)]' 
-            : 'bg-[#06090e] border border-white/5 shadow-[inset_0_8px_20px_rgba(0,0,0,0.9)]'}`}
+          ${isTriggered ? 'bg-red-950/20 border border-red-500/50 shadow-[inset_0_0_30px_rgba(220,38,38,0.15)]' : 'bg-[#06090e] border border-white/5 shadow-[inset_0_8px_20px_rgba(0,0,0,0.9)]'}`}
         >
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-            <span className={`font-semibold text-xs tracking-[0.25em] transition-all duration-500 ${isTriggered ? 'opacity-0 scale-95' : 'text-gray-600 ml-6'}`}>
-              GESER UNTUK SOS
-            </span>
-            <span className={`absolute font-black text-sm tracking-widest text-red-500 transition-all duration-500 delay-100 ${isTriggered ? 'opacity-100 scale-100' : 'opacity-0 scale-110'}`}>
-              🚨 DARURAT AKTIF
-            </span>
+            <span className={`font-semibold text-xs tracking-[0.25em] transition-all duration-500 ${isTriggered ? 'opacity-0 scale-95' : 'text-gray-600 ml-6'}`}>GESER UNTUK SOS</span>
+            <span className={`absolute font-black text-sm tracking-widest text-red-500 transition-all duration-500 delay-100 ${isTriggered ? 'opacity-100 scale-100' : 'opacity-0 scale-110'}`}>MEMBUKA KAMERA...</span>
           </div>
-
-          <div 
-            className="absolute left-1.5 top-1.5 bottom-1.5 rounded-full bg-gradient-to-r from-red-600/10 to-red-600/40 z-10 transition-all duration-75"
-            style={{ width: isTriggered ? 'calc(100% - 12px)' : `calc(60px + ${(swipeValue / 100) * 228}px)` }}
-          />
-
-          <div 
-            className={`absolute left-1.5 z-20 h-[60px] w-[60px] rounded-full flex items-center justify-center transition-all duration-75
-              ${isTriggered 
-                ? 'bg-red-600 border border-red-400 shadow-[0_0_25px_rgba(239,68,68,0.6)]' 
-                : 'bg-gradient-to-b from-[#1a2235] to-[#0f1523] border-t border-slate-600/50 shadow-2xl'}`}
+          <div className="absolute left-1.5 top-1.5 bottom-1.5 rounded-full bg-gradient-to-r from-red-600/10 to-red-600/40 z-10 transition-all duration-75" style={{ width: isTriggered ? 'calc(100% - 12px)' : `calc(60px + ${(swipeValue / 100) * 228}px)` }} />
+          <div className={`absolute left-1.5 z-20 h-[60px] w-[60px] rounded-full flex items-center justify-center transition-all duration-75
+              ${isTriggered ? 'bg-red-600 border border-red-400 shadow-[0_0_25px_rgba(239,68,68,0.6)]' : 'bg-gradient-to-b from-[#1a2235] to-[#0f1523] border-t border-slate-600/50 shadow-2xl'}`}
             style={{ transform: `translateX(${isTriggered ? 228 : (swipeValue / 100) * 228}px)` }}
           >
             <div className={`transition-all duration-300 ${isTriggered ? 'text-white' : 'text-red-500'}`}>
-              {isTriggered ? (
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-7 w-7 drop-shadow-md" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                </svg>
-              ) : (
+              {isTriggered ? <span className="text-xl">📷</span> : (
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
                 </svg>
               )}
             </div>
           </div>
-
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={swipeValue}
-            onChange={handleSwipe}
-            disabled={isTriggered}
-            className="absolute z-30 w-full h-full opacity-0 cursor-pointer"
-          />
+          <input type="range" min="0" max="100" value={swipeValue} onChange={handleSwipe} disabled={isTriggered} className="absolute z-30 w-full h-full opacity-0 cursor-pointer" />
         </div>
-
-        <button 
-          onClick={handleAman} 
-          className="relative z-20 px-8 py-2.5 border border-white/10 hover:border-white/30 rounded-full text-[10px] font-bold tracking-[0.2em] text-gray-500 hover:text-gray-300 transition-all cursor-pointer uppercase font-sans mt-2"
-        >
-          Lapor saya Aman
-        </button>
+        <button onClick={handleAman} className="relative z-20 px-8 py-2.5 border border-white/10 hover:border-white/30 rounded-full text-[10px] font-bold tracking-[0.2em] text-gray-500 hover:text-gray-300 transition-all cursor-pointer uppercase font-sans mt-2">Batalkan / Lapor Aman</button>
       </div>
 
-      {/* LIVE RADAR POSKO */}
       <div className="w-full max-w-sm flex flex-col gap-3 z-10 mb-6">
         <div className="flex justify-between items-center border-b border-white/10 pb-2">
           <h3 className="text-[10px] font-bold tracking-widest text-gray-300">LIVE RADAR POSKO</h3>
           <span className="text-[8px] bg-cyan-900/50 text-cyan-400 px-2 py-0.5 rounded-full">SYNC</span>
         </div>
-        
         <div className="flex flex-col gap-3">
           {shelterList.map(s => {
             const pct = (s.kapasitas_terisi / s.kapasitas_maksimal) * 100;
@@ -297,71 +415,105 @@ export default function PortalWarga() {
         </div>
       </div>
 
-      {/* KONTAK MEDIS DARURAT */}
-      <div className="w-full max-w-sm flex flex-col gap-3 z-10 mb-8">
-        <div className="flex justify-between items-center border-b border-white/10 pb-2">
-          <h3 className="text-[10px] font-bold tracking-widest text-gray-300">KONTAK MEDIS DARURAT</h3>
-          <span className="text-[8px] bg-red-900/50 text-red-400 px-2 py-0.5 rounded-full animate-pulse">24/7</span>
-        </div>
-        
-        <div className="grid grid-cols-2 gap-3">
-          <a href="tel:119" className="bg-black/30 border border-white/5 p-3 rounded-xl flex flex-col items-center justify-center gap-1 active:scale-95 transition-transform hover:border-emerald-500/50 cursor-pointer">
-            <span className="text-xl mb-1">🚑</span>
-            <span className="text-[9px] font-bold text-gray-200 mt-1">AMBULANS / IGD</span>
-            <span className="text-[10px] font-mono font-bold text-emerald-400">119</span>
-          </a>
-          <a href="tel:08112233445" className="bg-black/30 border border-white/5 p-3 rounded-xl flex flex-col items-center justify-center gap-1 active:scale-95 transition-transform hover:border-emerald-500/50 cursor-pointer">
-            <span className="text-xl mb-1">🏥</span>
-            <span className="text-[9px] font-bold text-gray-200 mt-1">RS KESDAM</span>
-            <span className="text-[10px] font-mono font-bold text-emerald-400">0811-2233-445</span>
-          </a>
-        </div>
-      </div>
-
-      <button onClick={() => { localStorage.removeItem('nexus_warga_profile'); router.push('/'); }} className="z-20 mt-auto text-[9px] text-gray-500 hover:text-red-400 tracking-widest transition-colors cursor-pointer border-b border-transparent hover:border-red-400 pb-0.5 relative">
-        HAPUS DATA SAYA (GANTI AKUN)
-      </button>
-
-      {globalStatus === 'KRITIS' && <div className="absolute inset-0 bg-red-900/10 animate-pulse pointer-events-none z-0"></div>}
-
-      {/* CUSTOM UI MODAL */}
-      {dialog.show && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-100 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className={`bg-[#0a0a14] border-2 rounded-2xl w-full max-w-xs p-6 shadow-2xl transform transition-all 
-            ${dialog.theme === 'red' ? 'border-red-500/50 shadow-[0_0_40px_rgba(239,68,68,0.2)]' : 
-              dialog.theme === 'emerald' ? 'border-emerald-500/50 shadow-[0_0_40px_rgba(16,185,129,0.2)]' : 
-              'border-cyan-500/50 shadow-[0_0_40px_rgba(34,211,238,0.2)]'}`}
-          >
-            <h3 className={`text-sm font-black tracking-widest uppercase mb-3 ${dialog.theme === 'red' ? 'text-red-400' : dialog.theme === 'emerald' ? 'text-emerald-400' : 'text-cyan-400'}`}>
-              {dialog.title}
-            </h3>
+      {/* OVERLAY AI SCANNING (Muncul setelah memotret) */}
+      {photoPreview && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[200] flex flex-col items-center justify-center p-6 animate-in fade-in duration-300">
+          <div className="w-full max-w-sm flex flex-col items-center relative">
             
-            <p className="text-xs text-gray-300 leading-relaxed font-sans mb-6">
-              {dialog.message}
-            </p>
+            <h2 className="text-cyan-400 font-black tracking-[0.3em] uppercase text-sm mb-6 flex items-center gap-3">
+              <div className="w-2 h-2 rounded-full bg-cyan-500 animate-ping"></div>
+              Nexus AI Vision
+            </h2>
 
+            {/* Kotak Preview Gambar */}
+            <div className="relative w-full aspect-[3/4] bg-gray-900 border-2 border-cyan-500/30 rounded-2xl overflow-hidden shadow-[0_0_50px_rgba(34,211,238,0.15)]">
+              <img src={photoPreview} alt="Darurat" className="w-full h-full object-cover opacity-60 mix-blend-screen" />
+              
+              {/* Animasi Garis Scanner AI */}
+              {aiStatus === 'scanning' && (
+                <>
+                  <div className="absolute top-0 left-0 w-full h-1 bg-cyan-400 shadow-[0_0_20px_#22d3ee] animate-[scan_2s_ease-in-out_infinite]"></div>
+                  <div className="absolute inset-0 bg-cyan-500/10 animate-pulse"></div>
+                  
+                  {/* Grid Targeting ala HUD Militer */}
+                  <div className="absolute inset-0 border-[1px] border-cyan-500/20 bg-[linear-gradient(rgba(34,211,238,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(34,211,238,0.1)_1px,transparent_1px)] bg-[size:40px_40px]"></div>
+                  
+                  <div className="absolute top-4 left-4 w-6 h-6 border-t-2 border-l-2 border-cyan-400"></div>
+                  <div className="absolute top-4 right-4 w-6 h-6 border-t-2 border-r-2 border-cyan-400"></div>
+                  <div className="absolute bottom-4 left-4 w-6 h-6 border-b-2 border-l-2 border-cyan-400"></div>
+                  <div className="absolute bottom-4 right-4 w-6 h-6 border-b-2 border-r-2 border-cyan-400"></div>
+                </>
+              )}
+
+              {/* Status Visual Overlay */}
+              {aiStatus === 'verified' && (
+                <div className="absolute inset-0 bg-emerald-500/20 flex items-center justify-center backdrop-blur-sm">
+                  <div className="bg-emerald-600 p-4 rounded-full shadow-[0_0_30px_#10b981] animate-in zoom-in">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                  </div>
+                </div>
+              )}
+              {aiStatus === 'rejected' && (
+                <div className="absolute inset-0 bg-red-500/20 flex items-center justify-center backdrop-blur-sm">
+                  <div className="bg-red-600 p-4 rounded-full shadow-[0_0_30px_#ef4444] animate-in zoom-in">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Teks Status di Bawah Gambar */}
+            <div className="mt-8 font-mono text-center h-16">
+              {aiStatus === 'scanning' && (
+                <>
+                  <p className="text-cyan-400 font-bold text-sm mb-1">MEMPROSES GAMBAR...</p>
+                  <p className="text-[10px] text-gray-500">Mendeteksi anomali struktural & termal</p>
+                </>
+              )}
+              {aiStatus === 'verified' && (
+                <>
+                  <p className="text-emerald-400 font-bold text-sm mb-1">ANCAMAN TERDETEKSI</p>
+                  <p className="text-[10px] text-gray-500">Prioritas tinggi. Mengirim laporan...</p>
+                </>
+              )}
+              {aiStatus === 'rejected' && (
+                <>
+                  <p className="text-red-500 font-bold text-sm mb-1">TIDAK ADA BAHAYA / PRANK</p>
+                  <p className="text-[10px] text-gray-500">Laporan ditolak otomatis oleh sistem.</p>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CUSTOM UI MODAL (DIALOG) */}
+      {dialog.show && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[300] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className={`bg-[#0a0a14] border-2 rounded-2xl w-full max-w-xs p-6 shadow-2xl transform transition-all ${dialog.theme === 'red' ? 'border-red-500/50 shadow-[0_0_40px_rgba(239,68,68,0.2)]' : dialog.theme === 'emerald' ? 'border-emerald-500/50 shadow-[0_0_40px_rgba(16,185,129,0.2)]' : 'border-cyan-500/50 shadow-[0_0_40px_rgba(34,211,238,0.2)]'}`}>
+            <h3 className={`text-sm font-black tracking-widest uppercase mb-3 ${dialog.theme === 'red' ? 'text-red-400' : dialog.theme === 'emerald' ? 'text-emerald-400' : 'text-cyan-400'}`}>{dialog.title}</h3>
+            <p className="text-xs text-gray-300 leading-relaxed font-sans mb-6">{dialog.message}</p>
             {dialog.isProcessing ? (
               <div className="flex justify-center mt-4">
-                <div className={`w-8 h-8 border-4 border-t-transparent rounded-full animate-spin 
-                  ${dialog.theme === 'red' ? 'border-red-500' : dialog.theme === 'emerald' ? 'border-emerald-500' : 'border-cyan-500'}`}>
-                </div>
+                <div className={`w-8 h-8 border-4 border-t-transparent rounded-full animate-spin ${dialog.theme === 'red' ? 'border-red-500' : dialog.theme === 'emerald' ? 'border-emerald-500' : 'border-cyan-500'}`}></div>
               </div>
             ) : (
               <div className="flex justify-end mt-4">
-                <button 
-                  onClick={() => setDialog({ ...dialog, show: false })}
-                  className={`w-full py-3 rounded-xl text-xs font-bold tracking-widest text-white transition-all shadow-lg cursor-pointer
-                    ${dialog.theme === 'red' ? 'bg-red-600 hover:bg-red-500 border border-red-400/50 shadow-red-900/50' : 
-                      dialog.theme === 'emerald' ? 'bg-emerald-600 hover:bg-emerald-500 border border-emerald-400/50 shadow-emerald-900/50' : 
-                      'bg-cyan-600 hover:bg-cyan-500 border border-cyan-400/50 shadow-cyan-900/50'}`}
-                >
-                  MENGERTI
-                </button>
+                <button onClick={() => setDialog({ ...dialog, show: false })} className={`w-full py-3 rounded-xl text-xs font-bold tracking-widest text-white transition-all shadow-lg cursor-pointer ${dialog.theme === 'red' ? 'bg-red-600 hover:bg-red-500 border-red-400/50' : dialog.theme === 'emerald' ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400/50' : 'bg-cyan-600 hover:bg-cyan-500 border-cyan-400/50'}`}>MENGERTI</button>
               </div>
             )}
           </div>
         </div>
       )}
+
+      {/* Tambahkan style keyframes untuk animasi scanner di bawah */}
+      <style jsx global>{`
+        @keyframes scan {
+          0% { top: 0%; }
+          50% { top: 100%; }
+          100% { top: 0%; }
+        }
+      `}</style>
     </main>
   );
 }
