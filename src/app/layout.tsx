@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import SmoothScroll from "./SmoothScroll";
-import "./globals.css"; 
+import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Nexus Command Center",
@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#22d3ee",
+  themeColor: "#04060c", // 👈 Ubah dari cyan ke warna background gelap
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,

@@ -5,7 +5,7 @@
   "start_url": "/warga",
   "display": "standalone",
   "background_color": "#04060c",
-  "theme_color": "#22d3ee",
+  "theme_color": "#04060c",
   "orientation": "portrait",
   "icons": [
     {
