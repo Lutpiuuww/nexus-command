@@ -1,151 +1,233 @@
 "use client";
-
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 
-export default function AccessGateway() {
+export default function NexusGateway() {
   const router = useRouter();
-  const [view, setView] = useState<'MENU' | 'REGISTER_WARGA' | 'LOGIN_STAFF'>('MENU');
-  const [selectedRole, setSelectedRole] = useState<{name: string, path: string, theme: string, icon: string} | null>(null);
-  const [pinInput, setPinInput] = useState("");
-  const [errorMsg, setErrorMsg] = useState("");
-  const [wargaForm, setWargaForm] = useState({ nama: '', hp: '', alamat: '' });
+  const [showWargaModal, setShowWargaModal] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login'); // STATE BARU: Mode Login atau Registrasi
+  const [isProcessing, setIsProcessing] = useState(false);
+  
+  // Menambahkan field kata_sandi
+  const [formData, setFormData] = useState({ nama: '', hp: '', alamat: '', password: '' });
+  const [dialog, setDialog] = useState<{ show: boolean; title: string; message: string; theme: 'red' | 'emerald' | 'cyan' }>({ show: false, title: '', message: '', theme: 'cyan' });
 
-  const roles = [
-    { id: 'warga', name: 'PORTAL WARGA', desc: 'Akses publik & darurat', path: '/warga', theme: 'cyan', icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z' },
-    { id: 'pusat', name: 'COMMAND CENTER', desc: 'Pusat radar utama', path: '/dashboard', theme: 'indigo', icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z' },
-    { id: 'medis', name: 'TIM MEDIS', desc: 'Triase & pantauan', path: '/medis', theme: 'emerald', icon: 'M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z' },
-    { id: 'koordinator', name: 'KOORD. LAPANGAN', desc: 'Manajemen relawan', path: '/lapangan', theme: 'red', icon: 'M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z' }
-  ];
+  useEffect(() => {
+    const saved = localStorage.getItem('nexus_warga_profile');
+    if (saved) {
+      const profile = JSON.parse(saved);
+      setFormData({ nama: profile.nama || '', hp: profile.hp || '', alamat: profile.alamat || '', password: '' });
+    }
+  }, []);
 
-  const handleRoleSelect = (role: any) => {
-    if (role.id === 'warga') {
-      const savedProfile = localStorage.getItem('nexus_warga_profile');
-      if (savedProfile) router.push(role.path);
-      else setView('REGISTER_WARGA');
-    } else {
-      setSelectedRole(role);
-      setView('LOGIN_STAFF');
-      setErrorMsg("");
-      setPinInput("");
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsProcessing(true);
+
+    try {
+      if (authMode === 'register') {
+        // --- LOGIKA REGISTRASI BARU ---
+        const { error } = await supabase.from('profil_warga').insert([
+          { nama: formData.nama, no_hp: formData.hp, alamat: formData.alamat, kata_sandi: formData.password }
+        ]);
+
+        if (error) {
+          if (error.code === '23505') { // Error Duplikat Nomor HP
+            setDialog({ 
+              show: true, title: 'REGISTRASI GAGAL', 
+              message: 'Nomor HP ini sudah terdaftar di sistem. Silakan gunakan menu LOGIN jika Anda sudah memiliki akun.', theme: 'red' 
+            });
+            setIsProcessing(false);
+            return; 
+          }
+          throw error;
+        }
+
+        localStorage.setItem('nexus_warga_profile', JSON.stringify({ nama: formData.nama, hp: formData.hp, alamat: formData.alamat }));
+        setDialog({ show: true, title: 'REGISTRASI BERHASIL', message: 'Akun Anda berhasil dibuat. Mengalihkan ke Portal Siaga...', theme: 'emerald' });
+        
+        setTimeout(() => router.push('/warga'), 2000);
+
+      } else {
+        // --- LOGIKA LOGIN (SUDAH PUNYA AKUN) ---
+        const { data, error } = await supabase.from('profil_warga')
+          .select('*')
+          .eq('no_hp', formData.hp)
+          .eq('kata_sandi', formData.password)
+          .maybeSingle();
+
+        if (error) throw error;
+
+        // Jika data tidak ditemukan (No HP atau Password salah)
+        if (!data) {
+          setDialog({ 
+            show: true, title: 'LOGIN GAGAL', 
+            message: 'Nomor HP atau Kata Sandi yang Anda masukkan salah. Silakan periksa kembali.', theme: 'red' 
+          });
+          setIsProcessing(false);
+          return;
+        }
+
+        // Jika berhasil Login
+        localStorage.setItem('nexus_warga_profile', JSON.stringify({ nama: data.nama, hp: data.no_hp, alamat: data.alamat }));
+        setDialog({ show: true, title: 'LOGIN BERHASIL', message: `Selamat datang kembali, ${data.nama}. Mengalihkan ke Portal...`, theme: 'cyan' });
+        
+        setTimeout(() => router.push('/warga'), 2000);
+      }
+    } catch (error: any) {
+      setDialog({ show: true, title: 'KONEKSI GAGAL', message: error.message || 'Terjadi kesalahan server.', theme: 'red' });
+      setIsProcessing(false);
     }
   };
 
-  const handleStaffLogin = () => {
-    if (pinInput === "1234") router.push(selectedRole!.path);
-    else setErrorMsg("Otorisasi ditolak. PIN salah.");
-  };
-
-  const handleWargaRegister = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!wargaForm.nama || !wargaForm.hp) return;
-    localStorage.setItem('nexus_warga_profile', JSON.stringify(wargaForm));
-    router.push('/warga');
+  const resetForm = () => {
+    setFormData({ nama: '', hp: '', alamat: '', password: '' });
   };
 
   return (
-    // PERBAIKAN: Mengganti min-h-screen dengan min-h-[100dvh], overflow-x-hidden, dan overflow-y-auto
-    <main className="min-h-[100dvh] bg-[#04040a] text-white flex flex-col items-center justify-center p-4 sm:p-6 font-mono relative overflow-x-hidden overflow-y-auto py-10">
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] sm:w-[800px] sm:h-[800px] bg-cyan-900/10 blur-[100px] rounded-full pointer-events-none"></div>
+    <main className="min-h-100dvh bg-[#04060c] text-white font-mono flex items-center justify-center p-6 relative overflow-hidden">
+      {/* Background Ornamen */}
+      <div className="fixed inset-0 pointer-events-none opacity-20 bg-[linear-gradient(rgba(34,211,238,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(34,211,238,0.1)_1px,transparent_1px)] bg-[size:40px_40px] z-0"></div>
+      <div className="fixed top-[-20%] left-[-10%] w-[50%] h-[50%] bg-cyan-900/20 blur-[120px] rounded-full z-0 pointer-events-none"></div>
+      <div className="fixed bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-emerald-900/10 blur-[120px] rounded-full z-0 pointer-events-none"></div>
 
-      <div className="z-10 w-full max-w-4xl flex flex-col items-center my-auto">
+      <div className="w-full max-w-4xl relative z-10 flex flex-col items-center">
         
-        {/* HEADER */}
-        <div className="text-center mb-10 animate-in fade-in slide-in-from-bottom-8 duration-700 mt-4">
-          <div className="flex justify-center gap-2 sm:gap-3 mb-3">
-             <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-red-500 animate-pulse"></div>
-             <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-cyan-500 animate-pulse delay-75"></div>
-             <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-emerald-500 animate-pulse delay-150"></div>
+        {/* Header */}
+        <div className="text-center mb-12">
+          <div className="flex items-center justify-center gap-3 mb-4">
+            <div className="w-3 h-3 bg-cyan-400 rounded-full animate-ping"></div>
+            <div className="w-3 h-3 bg-cyan-500 rounded-full shadow-[0_0_15px_#22d3ee] absolute"></div>
           </div>
-          <h1 className="text-3xl sm:text-4xl font-black tracking-[0.2em] sm:tracking-[0.3em] text-transparent bg-clip-text bg-gradient-to-r from-white to-gray-500 mb-2">
-            NEXUS <span className="text-cyan-400">COMMAND</span>
+          <h1 className="text-3xl md:text-5xl font-black tracking-[0.3em] uppercase text-white mb-2">
+            NEXUS <span className="text-cyan-400">CENTRAL</span>
           </h1>
-          <p className="text-[10px] sm:text-xs text-gray-400 tracking-widest uppercase px-4">Sistem Informasi Mitigasi & Evakuasi</p>
+          <p className="text-xs md:text-sm text-gray-500 tracking-[0.2em] uppercase">Sistem Manajemen Evakuasi Terpadu</p>
         </div>
 
-        {/* LAYAR 1: MENU (Grid diubah jadi responsif) */}
-        {view === 'MENU' && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 w-full max-w-2xl animate-in zoom-in-95 duration-500 pb-8">
-            {roles.map((role) => (
-              <button key={role.id} onClick={() => handleRoleSelect(role)} className={`group relative overflow-hidden bg-white/5 border border-white/10 hover:border-${role.theme}-500/50 rounded-2xl p-5 sm:p-6 text-left transition-all duration-300 hover:shadow-[0_0_30px_rgba(0,0,0,0.5)] active:scale-95`}>
-                <div className={`absolute inset-0 bg-gradient-to-br from-${role.theme}-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity`}></div>
-                <div className="flex items-center gap-4 sm:block">
-                  <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-black/50 border border-white/10 flex items-center justify-center sm:mb-4 group-hover:border-${role.theme}-400 transition-colors shrink-0`}>
-                    <svg className={`w-5 h-5 sm:w-6 sm:h-6 text-${role.theme}-400`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d={role.icon}></path></svg>
-                  </div>
-                  <div>
-                    <h3 className="text-sm sm:text-lg font-bold tracking-widest text-white mb-0.5 sm:mb-1">{role.name}</h3>
-                    <p className="text-[10px] sm:text-xs text-gray-500 font-sans">{role.desc}</p>
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
+        {/* Pilihan Portal */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-2xl">
+          
+          <button onClick={() => { setShowWargaModal(true); setAuthMode('login'); }} className="group relative bg-[#0a0f18] border border-cyan-900/50 hover:border-cyan-400 rounded-2xl p-6 text-left transition-all duration-300 hover:shadow-[0_0_30px_rgba(34,211,238,0.15)] cursor-pointer overflow-hidden">
+            <div className="absolute top-0 right-0 w-24 h-24 bg-cyan-500/5 rounded-bl-full blur-xl group-hover:bg-cyan-500/20 transition-all"></div>
+            <div className="w-12 h-12 bg-cyan-950/50 border border-cyan-500/50 rounded-xl flex items-center justify-center text-cyan-400 mb-4 group-hover:scale-110 transition-transform">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+            </div>
+            <h2 className="text-lg font-black tracking-widest text-white mb-1">PORTAL WARGA</h2>
+            <p className="text-[10px] text-gray-400 tracking-wider">Akses layanan darurat, lapor SOS, dan panduan evakuasi wilayah.</p>
+          </button>
 
-        {/* LAYAR 2: REGISTER WARGA (Touch-Friendly Input) */}
-        {view === 'REGISTER_WARGA' && (
-          <form onSubmit={handleWargaRegister} className="w-full max-w-md bg-white/5 border border-white/10 rounded-3xl p-6 sm:p-8 backdrop-blur-xl animate-in slide-in-from-right-12 duration-500 shadow-2xl mb-8">
-            <h2 className="text-lg sm:text-xl font-bold tracking-widest text-cyan-400 mb-2">REGISTRASI WARGA</h2>
-            <p className="text-[10px] sm:text-xs text-gray-400 font-sans mb-6">Data ini akan mempercepat proses identifikasi dan evakuasi Anda saat kondisi darurat.</p>
-            
-            <div className="flex flex-col gap-4 mb-6">
-              <div>
-                <label className="block text-[9px] sm:text-[10px] text-gray-400 tracking-widest mb-1.5 uppercase">Nama Lengkap</label>
-                <input required type="text" value={wargaForm.nama} onChange={e => setWargaForm({...wargaForm, nama: e.target.value})} placeholder="Contoh: Budi Santoso" className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-400 transition-colors" />
-              </div>
-              <div>
-                <label className="block text-[9px] sm:text-[10px] text-gray-400 tracking-widest mb-1.5 uppercase">Nomor HP (Aktif)</label>
-                <input required type="tel" value={wargaForm.hp} onChange={e => setWargaForm({...wargaForm, hp: e.target.value})} placeholder="08..." className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-400 transition-colors" />
-              </div>
-              <div>
-                <label className="block text-[9px] sm:text-[10px] text-gray-400 tracking-widest mb-1.5 uppercase">Alamat Domisili</label>
-                <textarea required value={wargaForm.alamat} onChange={e => setWargaForm({...wargaForm, alamat: e.target.value})} placeholder="Kecamatan, Kelurahan..." className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-400 transition-colors resize-none h-20" />
-              </div>
+          <button onClick={() => router.push('/medis')} className="group relative bg-[#0a0f18] border border-emerald-900/50 hover:border-emerald-400 rounded-2xl p-6 text-left transition-all duration-300 hover:shadow-[0_0_30px_rgba(16,185,129,0.15)] cursor-pointer overflow-hidden">
+            <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-bl-full blur-xl group-hover:bg-emerald-500/20 transition-all"></div>
+            <div className="w-12 h-12 bg-emerald-950/50 border border-emerald-500/50 rounded-xl flex items-center justify-center text-emerald-400 mb-4 group-hover:scale-110 transition-transform">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>
             </div>
+            <h2 className="text-lg font-black tracking-widest text-white mb-1">UNIT MEDIS</h2>
+            <p className="text-[10px] text-gray-400 tracking-wider">Akses khusus tim kesehatan untuk triase dan pengerahan ambulans.</p>
+          </button>
 
-            <div className="flex gap-2 sm:gap-3">
-              <button type="button" onClick={() => setView('MENU')} className="px-4 sm:px-6 py-3 border border-white/10 bg-white/5 hover:bg-white/10 rounded-xl text-[10px] sm:text-xs font-bold tracking-widest text-gray-400 transition-colors">KEMBALI</button>
-              <button type="submit" className="flex-1 py-3 bg-cyan-600 hover:bg-cyan-500 border border-cyan-400/50 rounded-xl text-[10px] sm:text-xs font-bold tracking-widest text-white transition-all shadow-lg shadow-cyan-900/50">SIMPAN & MASUK</button>
+          <button onClick={() => router.push('/lapangan')} className="group relative bg-[#0a0f18] border border-amber-900/50 hover:border-amber-400 rounded-2xl p-6 text-left transition-all duration-300 hover:shadow-[0_0_30px_rgba(245,158,11,0.15)] cursor-pointer overflow-hidden">
+            <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/5 rounded-bl-full blur-xl group-hover:bg-amber-500/20 transition-all"></div>
+            <div className="w-12 h-12 bg-amber-950/50 border border-amber-500/50 rounded-xl flex items-center justify-center text-amber-400 mb-4 group-hover:scale-110 transition-transform">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
             </div>
-          </form>
-        )}
+            <h2 className="text-lg font-black tracking-widest text-white mb-1">OPS LAPANGAN</h2>
+            <p className="text-[10px] text-gray-400 tracking-wider">Akses koordinator relawan untuk manajemen pergerakan evakuasi.</p>
+          </button>
 
-        {/* LAYAR 3: LOGIN STAFF */}
-        {view === 'LOGIN_STAFF' && (
-          <div className="w-full max-w-md bg-white/5 border border-white/10 rounded-3xl p-6 sm:p-8 backdrop-blur-xl animate-in slide-in-from-left-12 duration-500 shadow-2xl mb-8">
-            <div className="flex items-center gap-3 sm:gap-4 mb-6 border-b border-white/10 pb-5">
-              <div className={`w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-${selectedRole?.theme}-900/30 border border-${selectedRole?.theme}-500/30 flex items-center justify-center shrink-0`}>
-                <svg className={`w-6 h-6 sm:w-7 sm:h-7 text-${selectedRole?.theme}-400`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d={selectedRole?.icon || ''}></path></svg>
-              </div>
-              <div>
-                <h2 className="text-base sm:text-lg font-bold tracking-widest text-white uppercase">{selectedRole?.name}</h2>
-                <span className={`text-[9px] sm:text-[10px] text-${selectedRole?.theme}-400 tracking-wider`}>SECURITY CLEARANCE REQUIRED</span>
-              </div>
+          <button onClick={() => router.push('/dashboard')} className="group relative bg-[#0a0f18] border border-purple-900/50 hover:border-purple-400 rounded-2xl p-6 text-left transition-all duration-300 hover:shadow-[0_0_30px_rgba(168,85,247,0.15)] cursor-pointer overflow-hidden">
+            <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/5 rounded-bl-full blur-xl group-hover:bg-purple-500/20 transition-all"></div>
+            <div className="w-12 h-12 bg-purple-950/50 border border-purple-500/50 rounded-xl flex items-center justify-center text-purple-400 mb-4 group-hover:scale-110 transition-transform">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
             </div>
-            
-            <div className="mb-6">
-              <label className="block text-[9px] sm:text-[10px] text-gray-400 tracking-widest mb-3 uppercase text-center">Masukkan PIN Otorisasi</label>
-              <input 
-                type="tel" // Berubah jadi "tel" agar numpad angka otomatis muncul di HP
-                value={pinInput}
-                onChange={(e) => setPinInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleStaffLogin()}
-                className={`w-full bg-black/60 border ${errorMsg ? 'border-red-500' : 'border-white/20'} rounded-2xl px-4 py-3 sm:py-4 text-white text-center tracking-[0.5em] sm:tracking-[1em] text-xl sm:text-2xl focus:outline-none focus:border-${selectedRole?.theme}-400 transition-colors shadow-inner`}
-                maxLength={4}
-                placeholder="••••"
-                autoFocus
-              />
-              {errorMsg && <p className="text-[10px] text-red-400 mt-3 tracking-wider text-center animate-pulse">{errorMsg}</p>}
-            </div>
+            <h2 className="text-lg font-black tracking-widest text-white mb-1">COMMAND CENTER</h2>
+            <p className="text-[10px] text-gray-400 tracking-wider">Akses otoritas tertinggi untuk pemantauan radar & sirine massal.</p>
+          </button>
 
-            <div className="flex gap-2 sm:gap-3">
-              <button onClick={() => setView('MENU')} className="px-4 sm:px-6 py-3 sm:py-4 border border-white/10 bg-white/5 hover:bg-white/10 rounded-xl text-[10px] sm:text-xs font-bold tracking-widest text-gray-400 transition-colors">KEMBALI</button>
-              <button onClick={handleStaffLogin} className={`flex-1 py-3 sm:py-4 border border-${selectedRole?.theme}-500/50 bg-${selectedRole?.theme}-600/20 hover:bg-${selectedRole?.theme}-600/40 rounded-xl text-[10px] sm:text-xs font-bold tracking-widest text-${selectedRole?.theme}-400 transition-colors`}>AKSES SISTEM</button>
-            </div>
-          </div>
-        )}
+        </div>
       </div>
+
+      {/* MODAL REGISTRASI & LOGIN WARGA */}
+      {showWargaModal && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#0a0a14] border border-cyan-500/30 rounded-2xl w-full max-w-sm overflow-hidden shadow-[0_0_50px_rgba(34,211,238,0.15)] relative">
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-sm font-black tracking-widest text-cyan-400 uppercase">IDENTIFIKASI WARGA</h3>
+                <button onClick={() => { setShowWargaModal(false); resetForm(); }} className="text-gray-500 hover:text-white cursor-pointer transition-colors text-lg">✕</button>
+              </div>
+
+              {/* Toggle Menu Login / Register */}
+              <div className="flex bg-black/50 border border-white/5 rounded-xl p-1 mb-6">
+                <button 
+                  type="button"
+                  onClick={() => { setAuthMode('login'); resetForm(); }}
+                  className={`flex-1 py-2 text-[10px] font-bold tracking-widest rounded-lg transition-all ${authMode === 'login' ? 'bg-cyan-600 text-white shadow-md' : 'text-gray-500 hover:text-white'}`}
+                >
+                  LOGIN
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => { setAuthMode('register'); resetForm(); }}
+                  className={`flex-1 py-2 text-[10px] font-bold tracking-widest rounded-lg transition-all ${authMode === 'register' ? 'bg-cyan-600 text-white shadow-md' : 'text-gray-500 hover:text-white'}`}
+                >
+                  REGISTRASI
+                </button>
+              </div>
+              
+              <form onSubmit={handleSubmit} className="flex flex-col gap-4 animate-in slide-in-from-bottom-2 duration-300">
+                {/* Field Nama hanya muncul saat Registrasi */}
+                {authMode === 'register' && (
+                  <div>
+                    <label className="text-[10px] text-gray-400 tracking-widest uppercase mb-1.5 block">Nama Lengkap</label>
+                    <input required type="text" value={formData.nama} onChange={(e) => setFormData({...formData, nama: e.target.value})} className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors" placeholder="Masukkan nama Anda..." />
+                  </div>
+                )}
+                
+                {/* Field HP muncul di keduanya */}
+                <div>
+                  <label className="text-[10px] text-gray-400 tracking-widest uppercase mb-1.5 block">Nomor HP Aktif</label>
+                  <input required type="tel" value={formData.hp} onChange={(e) => setFormData({...formData, hp: e.target.value})} className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors" placeholder="Contoh: 081234567890" />
+                </div>
+
+                {/* Field Kata Sandi muncul di keduanya */}
+                <div>
+                  <label className="text-[10px] text-gray-400 tracking-widest uppercase mb-1.5 block">Kata Sandi</label>
+                  <input required type="password" value={formData.password} onChange={(e) => setFormData({...formData, password: e.target.value})} className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors" placeholder="••••••••" />
+                </div>
+
+                {/* Field Alamat hanya muncul saat Registrasi */}
+                {authMode === 'register' && (
+                  <div>
+                    <label className="text-[10px] text-gray-400 tracking-widest uppercase mb-1.5 block">Alamat Domisili</label>
+                    <textarea required value={formData.alamat} onChange={(e) => setFormData({...formData, alamat: e.target.value})} className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors resize-none h-20 custom-scrollbar" placeholder="Alamat tempat tinggal saat ini..." />
+                  </div>
+                )}
+                
+                <button type="submit" disabled={isProcessing} className="w-full py-4 mt-2 bg-cyan-600/90 hover:bg-cyan-500 text-white text-[11px] font-black tracking-[0.3em] rounded-xl transition-all shadow-[0_0_20px_rgba(34,211,238,0.2)] border border-cyan-400/50 cursor-pointer flex justify-center items-center h-[52px]">
+                  {isProcessing ? <div className="w-5 h-5 border-2 border-t-transparent border-white rounded-full animate-spin"></div> : (authMode === 'login' ? "MASUK PORTAL" : "BUAT AKUN BARU")}
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DIALOG POP-UP (SUKSES & GAGAL) */}
+      {dialog.show && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[200] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className={`bg-[#0a0a14] border-2 rounded-2xl w-full max-w-sm p-6 shadow-2xl transform transition-all ${dialog.theme === 'red' ? 'border-red-500/50 shadow-[0_0_40px_rgba(239,68,68,0.2)]' : dialog.theme === 'emerald' ? 'border-emerald-500/50 shadow-[0_0_40px_rgba(16,185,129,0.2)]' : 'border-cyan-500/50 shadow-[0_0_40px_rgba(34,211,238,0.2)]'}`}>
+            <h3 className={`text-sm font-black tracking-widest uppercase mb-3 ${dialog.theme === 'red' ? 'text-red-400' : dialog.theme === 'emerald' ? 'text-emerald-400' : 'text-cyan-400'}`}>{dialog.title}</h3>
+            <p className="text-xs text-gray-300 leading-relaxed font-sans mb-6">{dialog.message}</p>
+            <div className="flex justify-end mt-4">
+              <button onClick={() => setDialog({ ...dialog, show: false })} className={`w-full py-3 rounded-xl text-xs font-bold tracking-widest text-white transition-all shadow-lg cursor-pointer ${dialog.theme === 'red' ? 'bg-red-600 hover:bg-red-500 border-red-400/50' : dialog.theme === 'emerald' ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400/50' : 'bg-cyan-600 hover:bg-cyan-500 border-cyan-400/50'}`}>MENGERTI</button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      <style jsx global>{` .custom-scrollbar::-webkit-scrollbar { width: 4px; } .custom-scrollbar::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 10px; } .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(34,211,238,0.3); border-radius: 10px; } .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(34,211,238,0.6); } `}</style>
     </main>
   );
 }
