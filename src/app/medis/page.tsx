@@ -10,6 +10,10 @@ export default function UnitMedis() {
   const [shelterList, setShelterList] = useState<any[]>([]);
   const [currentTime, setCurrentTime] = useState<string>("");
   
+  // STATE BARU: Radar Peringatan & Episentrum
+  const [globalStatus, setGlobalStatus] = useState<'AMAN' | 'KRITIS'>('AMAN');
+  const [disasterInfo, setDisasterInfo] = useState<{ jenis: string, lat: number, lon: number, radius: number } | null>(null);
+
   const [selectedLaporan, setSelectedLaporan] = useState<any | null>(null);
   const [triageLevel, setTriageLevel] = useState<'MERAH' | 'KUNING' | 'HIJAU' | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -24,12 +28,25 @@ export default function UnitMedis() {
 
   const fetchData = async () => {
     try {
+      // 1. Tarik Data Radar Bencana
+      const { data: statusData } = await supabase.from('peringatan_dini').select('*').order('id', { ascending: false }).limit(1);
+      if (statusData && statusData.length > 0) {
+        setGlobalStatus(statusData[0].status_level);
+        if (statusData[0].status_level === 'KRITIS') {
+          setDisasterInfo({
+            jenis: statusData[0].jenis_bencana || 'ANCAMAN',
+            lat: statusData[0].lat_bencana,
+            lon: statusData[0].lon_bencana,
+            radius: statusData[0].radius_km
+          });
+        }
+      }
+
+      // 2. Tarik Laporan Korban
       const { data: dataLaporan } = await supabase.from('laporan_darurat').select('*');
       const { data: dataPenugasan } = await supabase.from('penugasan_relawan').select('*');
-
       const allLaporan = dataLaporan || [];
       const allPenugasan = dataPenugasan || [];
-
       const handledByMedis = allPenugasan.filter(p => p.kontak_petugas === 'RS Darurat Lhokseumawe').map(p => p.nama_pelapor);
       
       const activeRadar = allLaporan.filter(l => l.status !== 'selesai' && !handledByMedis.includes(l.nama_korban));
@@ -37,7 +54,7 @@ export default function UnitMedis() {
       
       const myRiwayat = allLaporan.filter(l => handledByMedis.includes(l.nama_korban));
       setRiwayatList(myRiwayat.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()).slice(0, 10)); 
-
+      
       const { data: shelterData } = await supabase.from('master_shelter').select('*').order('id_shelter', { ascending: true });
       if (shelterData) setShelterList(shelterData);
     } catch (error) {
@@ -47,11 +64,29 @@ export default function UnitMedis() {
 
   useEffect(() => {
     fetchData();
-    const channel = supabase.channel('medis_laporan')
+    const channelLaporan = supabase.channel('medis_laporan')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'laporan_darurat' }, () => { fetchData(); if (navigator.vibrate) navigator.vibrate([300, 100, 300]); })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'penugasan_relawan' }, () => { fetchData(); })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+
+    // CHANNEL BARU: Mendengarkan Alarm Bencana
+    const channelStatus = supabase.channel('medis_status')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'peringatan_dini' }, (payload) => {
+        setGlobalStatus(payload.new.status_level);
+        if (payload.new.status_level === 'KRITIS') {
+          setDisasterInfo({
+            jenis: payload.new.jenis_bencana || 'ANCAMAN',
+            lat: payload.new.lat_bencana,
+            lon: payload.new.lon_bencana,
+            radius: payload.new.radius_km
+          });
+          if (navigator.vibrate) navigator.vibrate([500, 200, 500]);
+        } else {
+          setDisasterInfo(null);
+        }
+      }).subscribe();
+
+    return () => { supabase.removeChannel(channelLaporan); supabase.removeChannel(channelStatus); };
   }, []);
 
   const handleTriage = async () => {
@@ -63,22 +98,16 @@ export default function UnitMedis() {
         setLaporanList(laporanList.filter(l => l.id !== selectedLaporan.id));
         setRiwayatList([{ ...selectedLaporan, status: 'diproses' }, ...riwayatList]);
       } else {
-        
-        // --- ERROR SCANNER DIMULAI DARI SINI ---
         const { error: insErr } = await supabase.from('penugasan_relawan').insert([{
           nama_pelapor: selectedLaporan.nama_korban,
           nama_petugas: `Tim Medis (Kategori ${triageLevel})`,
           kontak_petugas: 'RS Darurat Lhokseumawe'
         }]);
-
         if (insErr) {
-          // Menampilkan pesan error asli dari Supabase agar kita tidak menebak-nebak
           alert(`❌ ERROR DARI SUPABASE:\n${insErr.message}\n\nDetail: ${insErr.details || 'Tidak ada detail'}\nKode: ${insErr.code}`);
           setIsProcessing(false);
-          return; // Hentikan eksekusi
+          return; 
         }
-        // --- ERROR SCANNER SELESAI ---
-
         await supabase.from('laporan_darurat').update({ status: 'diproses' }).eq('nama_korban', selectedLaporan.nama_korban);
       }
       
@@ -87,35 +116,35 @@ export default function UnitMedis() {
       
       setSelectedLaporan(null); setTriageLevel(null);
       fetchData();
-
       setDialog({
         show: true,
         title: 'AMBULANS DIKERAHKAN!',
         message: `Tim medis darurat (Triase ${kategoriTriage}) sedang dalam perjalanan menuju lokasi ${namaTarget}. Sinyal GPS telah dikirim ke perangkat korban.`
       });
-
     } catch (error) { console.error("Error eksekusi medis:", error); } 
     finally { setIsProcessing(false); }
   };
 
   return (
     <main className="min-h-100dvh bg-[#04060c] text-white font-mono relative overflow-x-hidden pb-12">
-      <div className="fixed top-[-20%] right-[-10%] w-[50%] h-[50%] bg-emerald-900/10 blur-[120px] rounded-full z-0 pointer-events-none"></div>
-
-      <nav className="w-full bg-black/40 backdrop-blur-md border-b border-emerald-900/50 sticky top-0 z-40 px-6 py-4 flex justify-between items-center shadow-[0_10px_30px_rgba(0,0,0,0.5)]">
+      {/* Background Dinamis */}
+      <div className="fixed inset-0 pointer-events-none opacity-10 bg-[linear-gradient(rgba(16,185,129,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(16,185,129,0.1)_1px,transparent_1px)] bg-[size:40px_40px] z-0"></div>
+      <div className={`fixed top-[-20%] right-[-10%] w-[50%] h-[50%] blur-[120px] rounded-full z-0 pointer-events-none transition-colors duration-1000 ${globalStatus === 'KRITIS' ? 'bg-red-900/20' : 'bg-emerald-900/10'}`}></div>
+      
+      <nav className={`w-full backdrop-blur-md border-b sticky top-0 z-40 px-6 py-4 flex justify-between items-center shadow-[0_10px_30px_rgba(0,0,0,0.5)] transition-colors duration-500 ${globalStatus === 'KRITIS' ? 'bg-red-950/40 border-red-900/50' : 'bg-black/40 border-emerald-900/50'}`}>
         <div className="flex items-center gap-4">
-          <div className="w-10 h-10 rounded-xl bg-emerald-950/50 border border-emerald-500/50 flex items-center justify-center text-emerald-400">
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors ${globalStatus === 'KRITIS' ? 'bg-red-950/50 border border-red-500/50 text-red-400' : 'bg-emerald-950/50 border border-emerald-500/50 text-emerald-400'}`}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clipRule="evenodd" /></svg>
           </div>
           <div>
-            <h1 className="text-xl font-black tracking-[0.2em] uppercase text-white">UNIT <span className="text-emerald-400">MEDIS</span></h1>
+            <h1 className="text-xl font-black tracking-[0.2em] uppercase text-white">UNIT <span className={globalStatus === 'KRITIS' ? 'text-red-400' : 'text-emerald-400'}>MEDIS</span></h1>
             <p className="text-[9px] text-gray-400 tracking-widest mt-0.5">DR. RAFFA & DR. AINI | OTORISASI AKTIF</p>
           </div>
         </div>
         <div className="flex items-center gap-6">
           <div className="hidden md:flex flex-col items-end border-r border-white/10 pr-6">
             <span className="text-[10px] text-gray-500 tracking-widest">WAKTU OPERASIONAL</span>
-            <span className="text-sm font-bold text-emerald-400">{currentTime || "SYNCING..."}</span>
+            <span className={`text-sm font-bold ${globalStatus === 'KRITIS' ? 'text-red-400' : 'text-emerald-400'}`}>{currentTime || "SYNCING..."}</span>
           </div>
           <button onClick={() => router.push('/')} className="bg-white/5 hover:bg-white/10 border border-white/10 text-white px-4 py-2 rounded-lg text-[10px] font-bold tracking-widest uppercase transition-all cursor-pointer">LOGOUT</button>
         </div>
@@ -125,16 +154,40 @@ export default function UnitMedis() {
         
         <div className="lg:col-span-2">
           
+          {/* PANEL BARU: PERINGATAN DARURAT MEDIS */}
+          {globalStatus === 'KRITIS' && disasterInfo && (
+            <div className="mb-6 bg-red-950/20 border-2 border-red-500 rounded-xl p-5 shadow-[0_0_30px_rgba(239,68,68,0.2)] animate-in slide-in-from-top-2 flex flex-col md:flex-row justify-between items-center gap-4">
+              <div>
+                <h2 className="text-sm font-black tracking-widest text-red-500 uppercase flex items-center gap-2">
+                  <span className="w-3 h-3 bg-red-500 rounded-full animate-ping inline-block"></span>
+                  PERINGATAN {disasterInfo.jenis}
+                </h2>
+                <p className="text-xs text-red-300 mt-1">
+                  Pusat bencana berada di koordinat <span className="font-bold text-white">{disasterInfo.lat}, {disasterInfo.lon}</span>. <br/>
+                  <span className="font-bold">Siagakan peralatan trauma & triase medis sesuai dengan profil ancaman!</span>
+                </p>
+              </div>
+              <a 
+                href={`https://www.google.com/maps/search/?api=1&query=${disasterInfo.lat},${disasterInfo.lon}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="bg-red-600 hover:bg-red-500 text-white border border-red-400/50 px-6 py-3 rounded-lg text-[10px] font-bold tracking-widest cursor-pointer shadow-lg whitespace-nowrap"
+              >
+                🗺️ LOKASI PUSAT BENCANA
+              </a>
+            </div>
+          )}
+
           <div className="mb-4 flex items-center gap-3">
-            <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
+            <div className={`w-2 h-2 rounded-full animate-pulse ${globalStatus === 'KRITIS' ? 'bg-red-500' : 'bg-emerald-500'}`}></div>
             <h2 className="text-xs font-bold tracking-[0.2em] text-white">PANGGILAN DARURAT MEDIS</h2>
-            <div className="flex-1 h-px bg-gradient-to-r from-emerald-900/50 to-transparent"></div>
+            <div className={`flex-1 h-px bg-gradient-to-r to-transparent ${globalStatus === 'KRITIS' ? 'from-red-900/50' : 'from-emerald-900/50'}`}></div>
           </div>
 
           {laporanList.length === 0 ? (
-            <div className="w-full h-64 bg-black/30 border border-white/5 rounded-2xl flex flex-col items-center justify-center relative overflow-hidden backdrop-blur-sm">
-              <div className="text-emerald-500/30 text-5xl mb-4">🏥</div>
-              <p className="text-sm font-black tracking-[0.3em] text-emerald-400 uppercase">TIDAK ADA PASIEN DARURAT</p>
+            <div className={`w-full h-64 bg-black/30 border rounded-2xl flex flex-col items-center justify-center relative overflow-hidden backdrop-blur-sm transition-colors duration-500 ${globalStatus === 'KRITIS' ? 'border-red-500/30' : 'border-white/5'}`}>
+              <div className={`${globalStatus === 'KRITIS' ? 'text-red-500/30' : 'text-emerald-500/30'} text-5xl mb-4`}>🏥</div>
+              <p className={`text-sm font-black tracking-[0.3em] uppercase ${globalStatus === 'KRITIS' ? 'text-red-400' : 'text-emerald-400'}`}>TIDAK ADA PASIEN DARURAT</p>
               <p className="text-[10px] text-gray-500 tracking-widest mt-2 uppercase">Tim medis dalam posisi siaga penuh.</p>
             </div>
           ) : (
@@ -147,7 +200,7 @@ export default function UnitMedis() {
                       <h3 className="text-base font-black text-white uppercase tracking-widest">{laporan.nama_korban}</h3>
                       <p className="text-[10px] text-gray-400 font-sans mt-1">📞 {laporan.kontak_korban || 'Tidak tersedia'}</p>
                     </div>
-                    <span className="text-[9px] font-bold tracking-widest bg-red-900/30 border border-red-500 text-red-400 px-2 py-1 rounded">TRIASE DIBUTUHKAN</span>
+                    <span className="text-[9px] font-bold tracking-widest bg-red-900/30 border border-red-500 text-red-400 px-2 py-1 rounded animate-pulse">TRIASE DIBUTUHKAN</span>
                   </div>
                   {laporan.photo_url && (
                     <div className="w-full h-24 rounded-lg border border-white/10 overflow-hidden relative z-10">
@@ -197,7 +250,6 @@ export default function UnitMedis() {
             <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
             <h2 className="text-xs font-bold tracking-[0.2em] text-white">KAPASITAS POSKO</h2>
           </div>
-
           <div className="bg-[#0a0f18] border border-white/5 rounded-2xl p-4 flex flex-col gap-4 max-h-[75vh] overflow-y-auto custom-scrollbar">
             {shelterList.map(s => {
               const pct = (s.kapasitas_terisi / s.kapasitas_maksimal) * 100;
@@ -266,7 +318,6 @@ export default function UnitMedis() {
           </div>
         </div>
       )}
-
       <style jsx global>{` .custom-scrollbar::-webkit-scrollbar { width: 4px; } .custom-scrollbar::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 10px; } .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(16,185,129,0.3); border-radius: 10px; } .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(16,185,129,0.6); } `}</style>
     </main>
   );
