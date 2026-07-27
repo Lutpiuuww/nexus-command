@@ -260,11 +260,11 @@ export default function CommandCenter() {
               <div>
                 <label className="text-[10px] text-slate-400 font-bold tracking-widest uppercase mb-2.5 block">KLASIFIKASI ANCAMAN</label>
                 <select value={disasterData.jenis} onChange={(e) => setDisasterData({...disasterData, jenis: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-4 text-sm text-slate-200 focus:outline-none focus:border-rose-500/50 cursor-pointer shadow-inner appearance-none">
-                  <option value="TSUNAMI">🌊 POTENSI TSUNAMI</option>
-                  <option value="GEMPA BUMI">🫨 GEMPA BUMI</option>
-                  <option value="BANJIR BANDANG">🌧️ BANJIR BANDANG</option>
-                  <option value="TANAH LONGSOR">⛰️ TANAH LONGSOR</option>
-                  <option value="KEBAKARAN BESAR">🔥 KEBAKARAN BESAR</option>
+                  <option value="TSUNAMI">POTENSI TSUNAMI</option>
+                  <option value="GEMPA BUMI">GEMPA BUMI</option>
+                  <option value="BANJIR BANDANG">BANJIR BANDANG</option>
+                  <option value="TANAH LONGSOR">TANAH LONGSOR</option>
+                  <option value="KEBAKARAN BESAR">KEBAKARAN BESAR</option>
                 </select>
               </div>
 
